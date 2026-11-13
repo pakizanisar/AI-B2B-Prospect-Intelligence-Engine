@@ -1,0 +1,1248 @@
+{
+  "name": "Prospect Discovery Engine",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "B2B Prospect Discovery",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "industry"
+            },
+            {
+              "fieldLabel": "location"
+            },
+            {
+              "fieldLabel": "prospect_type",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "Local businesses"
+                  },
+                  {
+                    "option": "Online B2B companies"
+                  }
+                ]
+              }
+            },
+            {
+              "fieldLabel": "ideal_customer_type"
+            },
+            {
+              "fieldLabel": "max_result",
+              "fieldType": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        -1008,
+        -448
+      ],
+      "id": "0492acb3-db29-4ffe-8039-188657761f3a",
+      "name": "On form submission"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.prospect_type }}",
+                    "rightValue": "Local businesses",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "9706e819-bd9a-4427-b338-e68d6ed368c8"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "23099b3d-8c92-43ee-9b98-b11baa4348e5",
+                    "leftValue": "={{ $json.prospect_type }}",
+                    "rightValue": "Online B2B companies",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        -1024,
+        64
+      ],
+      "id": "682918ae-cfc2-4684-ac60-9e6c35d50ed1",
+      "name": "Switch"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst response = $input.first()?.json ?? {};\nconst elements = response.elements ?? response.body?.elements ?? [];\n\nconst source = $('Build Search Query').first().json;\nconst requestedLimit = Math.max(\n  1,\n  Math.min(100, Number(source.requestedLimit) || 25)\n);\n\nconst seen = new Set();\nconst prospects = [];\n\nfor (const element of elements) {\n  const tags = element.tags ?? {};\n  const name = String(tags.name ?? '').trim();\n\n  // Unnamed map elements are not useful company prospects.\n  if (!name) continue;\n\n  const key = `${element.type}/${element.id}`;\n  if (seen.has(key)) continue;\n  seen.add(key);\n\n  const lat = element.lat ?? element.center?.lat ?? null;\n  const lon = element.lon ?? element.center?.lon ?? null;\n\n  const street = [\n    tags['addr:housenumber'],\n    tags['addr:street']\n  ].filter(Boolean).join(' ');\n\n  const address = [\n    street,\n    tags['addr:suburb'],\n    tags['addr:city'] ?? tags['addr:town'],\n    tags['addr:postcode'],\n    tags['addr:country']\n  ].filter(Boolean).join(', ');\n\n  prospects.push({\n    json: {\n      search_id : source.search_id,\n      execution_id : source.execution_id,\n      source: 'OpenStreetMap',\n      osm_id: key,\n      name,\n      category: source.mappedCategory,\n      industry_requested: source.industry,\n      location_requested: source.location,\n      ideal_customer_type : source.ideal_customer_type,\n      address: address || null,\n      website: tags.website ?? tags['contact:website'] ?? tags.url ?? null,\n      phone: tags.phone ?? tags['contact:phone'] ?? null,\n      email: tags.email ?? tags['contact:email'] ?? null,\n      latitude: lat,\n      longitude: lon,\n      osm_url: `https://www.openstreetmap.org/${element.type}/${element.id}`,\n      discovery_status: 'discovered'\n    }\n  });\n\n  if (prospects.length >= requestedLimit) break;\n}\n\nreturn prospects;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -112,
+        -112
+      ],
+      "id": "854f009f-2d18-4722-b887-7d1e504a8140",
+      "name": "Normalize OSM Prospects"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json\nconst industry = String(input.industry || \"\").trim().toLowerCase()\nconst location = String(input.location || \"\").split(\",\")[0].toLowerCase()\n\nif (!industry || !location){\n  throw new Error ('industry and location are required')\n}\nconst maxResult = Math.max(1,\n      Math.min(100, Number(input.max_result) || 25))\n\nreturn [{\n  json: {\n    ...input,\n    industry,\n    location,\n    max_result: maxResult\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -720,
+        304
+      ],
+      "id": "d0af13bb-24ec-41ee-993a-cb72d67eb352",
+      "name": "Prepare BizData Search"
+    },
+    {
+      "parameters": {
+        "url": "https://bizdata-web.vercel.app/api/businesses",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "location",
+              "value": "={{ $json.location }}"
+            },
+            {
+              "name": "category",
+              "value": "={{ $json.industry}}"
+            },
+            {
+              "name": "limit",
+              "value": "={{ $json.max_result}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        -512,
+        304
+      ],
+      "id": "ba5493da-d551-4d26-9bc4-8d8df1914d9c",
+      "name": "BizData - Search Companies",
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst businesses = response.businesses;\nconst searchInput = $('Prepare BizData Search').first().json;\n\nif (!Array.isArray(businesses)) {\n  throw new Error('Expected a businesses array in the API response.');\n}\n\nreturn businesses.map(business => ({\n  json: {\n    search_id :searchInput.search_id,\n    execution_id :searchInput.execution_id,\n    source: 'bizdata',\n    osm_id: business.osm_id || null,\n    name: business.name || '',\n    category: business.category || '',\n    industry_requested: searchInput.industry,\n    location_requested: searchInput.location,\n    ideal_customer_type: searchInput.ideal_customer_type,\n    address: business.address || '',\n    website: business.website || '',\n    phone: business.phone || '',\n    email: business.email || '',\n    latitude: business.lat ?? null,\n    longitude: business.lon ?? null,\n    opening_hours: business.opening_hours || '',\n    osm_url: business.osm_url || null,\n    discovery_status: 'discovered'\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -272,
+        288
+      ],
+      "id": "21c3b372-130f-4c63-bdc4-af319c9dbb57",
+      "name": "Normalize BizData Prospects"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst items = $input.all();\n\nconst uniqueProspects = new Map();\n\nfunction normalizeDomain(website) {\n  if (!website) return null;\n\n  try {\n    const url = new URL(\n      website.includes('://') ? website : `https://${website}`\n    );\n\n    return url.hostname\n      .toLowerCase()\n      .replace(/^www\\./, '')\n      .replace(/\\.$/, '');\n  } catch {\n    return null;\n  }\n}\n\nfunction normalizeText(value) {\n  return String(value || '')\n    .toLowerCase()\n    .replace(/[^\\p{L}\\p{N}]+/gu, ' ')\n    .trim()\n    .replace(/\\s+/g, ' ');\n}\n\nfor (const item of items) {\n  const prospect = item.json;\n\n  const domain = normalizeDomain(prospect.website);\n\n  const name = normalizeText(prospect.name);\n\n  const address = normalizeText(\n    prospect.address || prospect.location_requested\n  );\n\n  // Use both keys so a record with a website\n  // can also match one without a website.\n  const keys = [];\n\n  if (domain) {\n    keys.push(`domain:${domain}`);\n  }\n\n  if (name && address) {\n    keys.push(`name_location:${name}|${address}`);\n  }\n\n  if (!keys.length) {\n    keys.push(`unmatched:${uniqueProspects.size}`);\n  }\n\n  let existing = null;\n\n  for (const key of keys) {\n    if (uniqueProspects.has(key)) {\n      existing = uniqueProspects.get(key);\n      break;\n    }\n  }\n\n  if (!existing) {\n    const record = {\n      ...prospect,\n      sources: [prospect.source]\n    };\n\n    for (const key of keys) {\n      uniqueProspects.set(key, record);\n    }\n\n    continue;\n  }\n\n  // Preserve information from both sources.\n  for (const [field, value] of Object.entries(prospect)) {\n    if (\n      (existing[field] === null ||\n        existing[field] === undefined ||\n        existing[field] === '') &&\n      value !== null &&\n      value !== undefined &&\n      value !== ''\n    ) {\n      existing[field] = value;\n    }\n  }\n\n  if (\n    prospect.source &&\n    !existing.sources.includes(prospect.source)\n  ) {\n    existing.sources.push(prospect.source);\n  }\n\n  // Register additional matching keys.\n  for (const key of keys) {\n    uniqueProspects.set(key, existing);\n  }\n}\n\nreturn [...new Set(uniqueProspects.values())].map(prospect => ({\n  json: prospect\n}));\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        256,
+        112
+      ],
+      "id": "f9a690ca-ddff-4a52-a66e-7ac7431f3c1b",
+      "name": "Deduplicate Prospects"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "models/gemini-3-flash-preview"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=You are a B2B prospect qualification assistant. Evaluate each prospect against the user's ideal customer profile using only the available evidence.\n\n## Target Criteria\n- **Target industry:** {{ $json.industry_requested }}\n- **Target location:** {{ $json.location_requested }}\n- **Ideal customer profile:** {{ $json.ideal_customer_type }}\n\n## Prospect Information\n- **Business name:** {{ $json.name }}\n- **Industry:** {{ $json.category }}\n- **Location:** {{ $json.location_requested }}\n- **Address:** {{ $json.address }}\n- **Website:** {{ $json.website }}\n- **Phone:** {{ $json.phone }}\n\n## Website Evidence\n- **Page title:** {{ $json.website_title }}\n- **Meta description:** {{ $json.website_description }}\n- **Extracted page text:** {{ $json.website_evidence }}\n- **Website fetch status:** {{ $json.website_fetch_status }}\n\n## Qualification Rules\n1. Assess industry and location relevance against the target criteria.\n2. Use the website title, description, and extracted text as evidence of the business's actual services and relevance.\n3. Do not assume a business needs AI automation, has a particular budget, or has a specific operational problem unless the evidence supports that conclusion.\n4. A website that advertises a service is evidence that the service is offered, not proof of demand for your services.\n5. If evidence is incomplete, contradictory, or insufficient to confidently assess fit, use `needs_review`.\n6. If website fetching failed, assess the other available information. Do not automatically disqualify the prospect because its website could not be fetched.\n7. Assign a fit score from 0 to 100 based on industry fit, location fit, ICP fit, and evidence quality. Do not give a high score based on industry and location alone when the ICP requires additional criteria.\n8. Return `qualified` only when the available evidence supports a good match. Use `not_qualified` when evidence clearly indicates a mismatch.\n\n## Output Requirements\nReturn only a valid JSON object. Do not use Markdown fences or additional commentary.\n\nUse exactly this structure:\n{\n  \"qualification_status\": \"qualified\",\n  \"fit_score\": 0,\n  \"reasoning\": \"Brief explanation supported by the available evidence.\",\n  \"evidence_found\": [\"Specific evidence supporting the assessment.\"],\n  \"missing_information\": [\"Important information not available.\"]\n}\n\nAllowed values for `qualification_status`:\n- `qualified`\n- `needs_review`\n- `not_qualified`\n\nReplace the example status and score with your actual assessment. Do not invent facts. Ensure the output is valid JSON."
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        1824,
+        -336
+      ],
+      "id": "51a458cc-f59b-4519-a760-7783a1c949e8",
+      "name": "\tAI - Qualify Prospect",
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "amount": 45
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1632,
+        -336
+      ],
+      "id": "816f0569-f91b-4b9c-8730-16de5c6aa329",
+      "name": "Rate Limit - Gemini"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.website }}",
+        "options": {
+          "response": {
+            "response": {}
+          },
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        848,
+        -336
+      ],
+      "name": "Fetch Prospect Website",
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{\n  json:{\n    ...$json,\n    status: \"failed\"\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        144,
+        -608
+      ],
+      "name": "Set Failed Status"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO dbo.prospect_search_runs\n(\n  search_id,\n  execution_id,\n  industry,\n  location,\n  prospect_type,\n  ideal_customer_type,\n  status,\n  created_at\n)\nOUTPUT INSERTED.search_id,\n  'query executed successfully' AS message\nVALUES (\n  $1,\n  $2,\n  $3,\n  $4,\n  $5,\n  $6,\n  $7,\n  GETDATE()\n);",
+        "options": {
+          "queryReplacement": "={{ $json.search_id }}, {{ $json.execution_id }}, {{ $json.industry }}, {{ $json.location }},{{ $json.prospect_type }}, {{ $json.ideal_customer_type }}, {{ $json.status }}\n"
+        }
+      },
+      "type": "n8n-nodes-base.microsoftSql",
+      "typeVersion": 1.2,
+      "position": [
+        -544,
+        -448
+      ],
+      "id": "03b3cb52-e46d-4d2c-ae63-c2222e91a758",
+      "name": "Create Search Log"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT *\nFROM dbo.prospect_search_runs\nWHERE search_id = $1;",
+        "options": {
+          "queryReplacement": "={{ $json.search_id }}"
+        }
+      },
+      "type": "n8n-nodes-base.microsoftSql",
+      "typeVersion": 1.2,
+      "position": [
+        -352,
+        -448
+      ],
+      "id": "550d2939-c23f-499f-b6c2-a1754906e5ec",
+      "name": "Get Search Log"
+    },
+    {
+      "parameters": {
+        "jsCode": "const prospect_data = $input.first().json\nconst search_id = [\n  Date.now().toString(36),\n  Math.random().toString(36).slice(2, 10)\n].join('-');\nreturn  [{\n  json: {\n  ...prospect_data,\n    search_id,\n    execution_id: $execution.id,\n    status: 'running'\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -768,
+        -448
+      ],
+      "id": "3682ff99-2eef-4674-b0bf-cdc3273e086b",
+      "name": "Start Search"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE dbo.prospect_search_runs\nSET \n  error_type = $2,\n  error_message = $3,\n  status = $4,\n  updated_at = GETDATE()\nWHERE search_id = $1",
+        "options": {
+          "queryReplacement": "={{ $json.search_id }}, {{ $json.error.code }}, {{ $json.error.message }}, {{ $json.status }}"
+        }
+      },
+      "type": "n8n-nodes-base.microsoftSql",
+      "typeVersion": 1.2,
+      "position": [
+        352,
+        -608
+      ],
+      "id": "78d5693f-dd91-4322-900d-85ff2da748f3",
+      "name": "Update Search Status"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO dbo.prospect_review_queue\n(   search_id,\n    osm_id,\n    source,\n    name,\n    industry,\n    location,\n    ideal_customer_type,\n    address,\n    website,\n    phone,\n    email,\n    osm_url,\n    data_quality,\n    processing_stage,\n    review_reason,\n    error_type,\n    error_message,\n    created_at\n)\nVALUES(\n    $1, $2, $3, $4, $5, $6,\n    $7, $8, $9, $10, $11, $12,\n    $13, $14, $15, $16, $17,\n    GETDATE()\n)\n",
+        "options": {
+          "queryReplacement": "={{ $json.search_id }}, {{ $json.osm_id }}, {{ $json.source }}, {{ $json.name }}, {{ $json.industry_requested }}, {{ $json.location_requested }}, {{ $json.ideal_customer_type }},{{ $json.address }}, {{ $json.website }}, {{ $json.phone }}, {{ $json.email }}, {{ $json.osm_url }}, {{ $json.data_quality }}, {{ $json.processing_stage }}, {{ $json.review_reason }}, {{ $json.error_type }},   {{ $json.error_message }}"
+        }
+      },
+      "type": "n8n-nodes-base.microsoftSql",
+      "typeVersion": 1.2,
+      "position": [
+        1264,
+        -592
+      ],
+      "id": "66f17817-b06f-42dc-b248-3bb3102280a4",
+      "name": "Save for Review"
+    },
+    {
+      "parameters": {
+        "jsCode": "const prospect_data = $input.all().map(item => item.json);\n\nreturn prospect_data.map(item => ({\n  json: {\n    ...item,\n    processing_stage: 'website_fetch',\n    review_reason: 'website_unreachable',\n    error_type: 'website_fetch_error',\n    error_message: item.error?.message || 'Website could not be reached'\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1056,
+        -592
+      ],
+      "id": "9617b4aa-a669-4025-b07e-9c065b02128d",
+      "name": "Prepare Failed Website"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "name": "Pass Prospect",
+      "typeVersion": 1,
+      "position": [
+        1424,
+        -336
+      ],
+      "id": "899bff13-3bb0-459b-a4be-80a531f8d0bc",
+      "placeholder": true
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst input = $('Start Search').first().json;\n\nconst industry = String(input.industry || '').trim().toLowerCase();\nconst location = String(input.location || '').split(',')[0].trim();\n\nif (!industry || !location) {\n  throw new Error('Industry and location are required.');\n}\n\n// Supported OpenStreetMap categories\nconst categories = {\n  dentist: ['amenity', 'dentist'],\n  'dental clinic': ['amenity', 'dentist'],\n  restaurant: ['amenity', 'restaurant'],\n  cafe: ['amenity', 'cafe'],\n  hotel: ['tourism', 'hotel'],\n  pharmacy: ['amenity', 'pharmacy'],\n  supermarket: ['shop', 'supermarket'],\n  'real estate': ['office', 'estate_agent'],\n  lawyer: ['office', 'lawyer'],\n  'law firm': ['office', 'lawyer'],\n  'marketing agency': ['office', 'advertising_agency'],\n  'software company': ['office', 'it'],\n  'it company': ['office', 'it'],\n  'web design agency': ['office', 'it'],\n};\n\nconst match = Object.entries(categories)\n  .find(([name]) => industry.includes(name));\n\nif (!match) {\n  throw new Error(\n    `No OpenStreetMap category mapping for \"${industry}\". ` +\n    'Add a matching category before searching.'\n  );\n}\n\nconst [tagKey, tagValue] = match[1];\n\n\nconst maxResults = Math.max(\n  1,\n  Math.min(100, Number(input.max_result) || 25)\n);\n\n\nconst geo = $('Find Location').first().json;\n\nconst lat = Number(geo.lat);\nconst lon = Number(geo.lon);\n\nif (!Number.isFinite(lat) || !Number.isFinite(lon)) {\n  throw new Error('Valid latitude and longitude are required.');\n}\n\nconst query = `\n[out:json][timeout:25];\nnwr[\"${tagKey}\"=\"${tagValue}\"](around:10000,${lat},${lon});\nout center tags ${maxResults};\n`;\n\nreturn [{\n  json: {\n    ...input,\n    overpassQuery: query,\n    mappedCategory: `${tagKey}=${tagValue}`,\n    requestedLimit: maxResults\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -528,
+        -96
+      ],
+      "id": "62ec8add-4c12-403a-becb-f64bb7c385a4",
+      "name": "Build Search Query"
+    },
+    {
+      "parameters": {
+        "url": "=https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q={{ encodeURIComponent($('On form submission').first().json.location) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "user_agent",
+              "value": "B2BProspectIntelligenceEngine/1.0 (local n8n workflow)"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        -720,
+        -96
+      ],
+      "id": "7a58a5c9-0b56-4c84-baec-2f7ea713f5d6",
+      "name": "Find Location",
+      "retryOnFail": true,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://overpass-api.de/api/interpreter",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "user-agent",
+              "value": "B2BProspectIntelligenceEngine/1.0 (local n8n workflow)"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "data",
+              "value": "={{ $json.overpassQuery }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        -336,
+        -96
+      ],
+      "id": "ad477527-d90f-48eb-8af4-bff8b23e3ec8",
+      "name": "Get Local Businesses",
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        64,
+        112
+      ],
+      "id": "c50dbf15-dd3a-4935-b2f2-ababbbdd4137",
+      "name": "Combine Results"
+    },
+    {
+      "parameters": {
+        "jsCode": "const prospects = $input.all().map(prospect => prospect.json)\nreturn prospects.map(prospect => {\n  let data_quality\n  const hasWebsite = Boolean(prospect.website)\n  const hasPhone = Boolean(prospect.phone)\n  const hasAddress = Boolean(prospect.address)\n  if (hasWebsite){\n    data_quality = \"sufficient_data\"}\n  else if (hasPhone || hasAddress){\n    data_quality = \"limited_data\"}\n  else{\n    data_quality = \"insufficient_data\"\n  }\n  return {\n    json:{\n      ...prospect,\n      data_quality\n    }\n  }\n});\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        432,
+        -224
+      ],
+      "id": "95b5fc05-abf1-48fa-bab9-9e31daf23364",
+      "name": "Check Data Quality"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "4a993797-d936-4aa3-b09e-d851a70757d2",
+              "leftValue": "={{ $json.data_quality }}",
+              "rightValue": "sufficient_data",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        640,
+        -224
+      ],
+      "id": "ae7f377a-b668-4c88-b798-aef45baece4f",
+      "name": "Ready for AI?"
+    },
+    {
+      "parameters": {
+        "jsCode": "const prospect_data = $input.all().map(item => item.json);\n\nreturn prospect_data.map(item => ({\n  json: {\n    ...item,\n    processing_stage: 'website_fetch',\n    review_reason: 'missing_website',\n    error_type: 'missing_website',\n    error_message: 'Website is not available; website fetching was not attempted'\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        176
+      ],
+      "id": "ed46c0a3-7691-46ce-acbd-e9025394c4c8",
+      "name": "Prepare for Review"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nreturn $input.all().map((item, i) => {\n  const text = item.json.content?.parts?.[0]?.text;\n\n  if (!text) {\n    throw new Error('Gemini response text not found');\n  }\n\n  const cleanText = text\n    .replace(/^```json\\s*/i, '')\n    .replace(/\\s*```$/, '')\n    .trim();\n\n  const qualification = JSON.parse(cleanText);\n\n  const prospect = $('Read Website Content').itemMatching(i).json;\n\n  return {\n    json: {\n      ...prospect,\n      ...qualification\n    },\n    pairedItem: { item: i }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        48
+      ],
+      "id": "6c5cf310-2b86-4d19-a0d4-43701e32e603",
+      "name": "Parse AI Results"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/companies/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "filterGroups",
+              "value": "={{ [{ filters: [{ propertyName: \"domain\", operator: \"EQ\", value: $json.website.replace(/^https?:\\/\\//, \"\").replace(/^www\\./, \"\").split(\"/\")[0] }] }] }}"
+            },
+            {
+              "name": "properties",
+              "value": "={{ [\"name\", \"domain\", \"phone\", \"city\", \"address\"] }}"
+            },
+            {
+              "name": "Limit",
+              "value": "1"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1728,
+        48
+      ],
+      "id": "fc72be0b-7b27-4a46-8409-26ec6262f302",
+      "name": "Find HubSpot Company"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "de838e72-160f-4a86-ade4-89b23ec48fd9",
+              "leftValue": "={{ $json.results }}",
+              "rightValue": "",
+              "operator": {
+                "type": "array",
+                "operation": "empty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1936,
+        48
+      ],
+      "id": "e9518305-eacc-49c2-a398-cf784de187b5",
+      "name": "Company Exists?"
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((item, i) => {\n  const prospect = $('Parse AI Results').itemMatching(i).json;\n\n  return {\n    json: prospect,\n    pairedItem: {\n      item: i\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2224,
+        -160
+      ],
+      "id": "29c96803-a4db-4c7b-9d1d-88ad7dccafa1",
+      "name": "Prepare New Company"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/companies",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n({\n  properties: {\n    name: $json.name,\n    domain: $json.website.replace(/^https?:\\/\\//, '').replace(/^www\\./, '').split('/')[0],\n    phone: $json.phone,\n    address: $json.address,\n    city: $json.city,\n    qualification_status: $json.qualification_status,\n    fit_score: $json.fit_score,\n    qualification_reasoning: $json.reasoning,\n    evidence_found: $json.evidence_found.join('; '),\n    missing_information: $json.missing_information.join('; ')\n  }\n})\n}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2480,
+        -160
+      ],
+      "id": "bf24d45b-03cb-4d09-8c55-b84e7799c2dd",
+      "name": "Create Company"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://api.hubapi.com/crm/v3/objects/companies/{{ $json.results[0].id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n({\n  properties: {\n    qualification_status: $('Parse AI Results').item.json.qualification_status,\n    fit_score: $('Parse AI Results').item.json.fit_score,\n    qualification_reasoning: $('Parse AI Results').item.json.reasoning,\n    evidence_found: $('Parse AI Results').item.json.evidence_found.join('; '),\n    missing_information: $('Parse AI Results').item.json.missing_information.join('; ')\n  }\n})\n}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2240,
+        208
+      ],
+      "id": "b693ac69-fd0c-4c4b-b238-cfb6e8614549",
+      "name": "Update Company"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n({\n  properties: {\n    hs_timestamp: new Date().toISOString(),\n    hs_note_body:\n      'AI Prospect Qualification\\n\\n' +\n      'Status: ' + $('Parse AI Results').item.json.qualification_status + '\\n' +\n      'Fit Score: ' + $('Parse AI Results').item.json.fit_score + '/100\\n\\n' +\n      'Reasoning:\\n' + $('Parse AI Results').item.json.reasoning + '\\n\\n' +\n      'Evidence Found:\\n' + $('Parse AI Results').item.json.evidence_found.join('\\n- ') + '\\n\\n' +\n      'Missing Information:\\n' + $('Parse AI Results').item.json.missing_information.join('\\n- ')\n  },\n  associations: [\n    {\n      to: {\n        id: $json.id\n      },\n      types: [\n        {\n          associationCategory: 'HUBSPOT_DEFINED',\n          associationTypeId: 190\n        }\n      ]\n    }\n  ]\n})\n}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2544,
+        208
+      ],
+      "id": "0f59c454-0219-4044-91f3-f8dfd101db16",
+      "name": "Add Qualification Note"
+    },
+    {
+      "parameters": {
+        "batchSize": 3,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1232,
+        -176
+      ],
+      "id": "6ed3940b-8532-4f7b-ac25-01040f9eb103",
+      "name": "Process in Batches"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nfunction decodeHtml(text) {\n  return text\n    .replace(/&amp;/gi, '&')\n    .replace(/&quot;/gi, '\"')\n    .replace(/&#39;|&apos;/gi, \"'\")\n    .replace(/&lt;/gi, '<')\n    .replace(/&gt;/gi, '>')\n    .replace(/&nbsp;|&#160;/gi, ' ')\n    .trim();\n}\n\nfunction extractMetaDescription(html) {\n  const tags = html.match(/<meta\\b[^>]*>/gi) || [];\n\n  const tag = tags.find(t =>\n    /\\bname\\s*=\\s*[\"']description[\"']/i.test(t)\n  );\n\n  return tag?.match(/\\bcontent\\s*=\\s*[\"']([^\"']*)[\"']/i)?.[1] ?? '';\n}\n\nreturn $input.all().map((item, index) => {\n\n  const html = String(item.json.data ?? '');\n\n  // Retrieve the matching original prospect\n  const original = $('Ready for AI?').itemMatching(index).json;\n\n  const website_title = decodeHtml(\n    html.match(/<title[^>]*>([\\s\\S]*?)<\\/title>/i)?.[1] ?? ''\n  );\n\n  const website_description = decodeHtml(\n    extractMetaDescription(html)\n  );\n\n  const website_evidence = decodeHtml(\n    html\n      .replace(/<script\\b[^>]*>[\\s\\S]*?<\\/script>/gi, ' ')\n      .replace(/<style\\b[^>]*>[\\s\\S]*?<\\/style>/gi, ' ')\n      .replace(/<noscript\\b[^>]*>[\\s\\S]*?<\\/noscript>/gi, ' ')\n      .replace(/<!--[\\s\\S]*?-->/g, ' ')\n      .replace(/<[^>]+>/g, ' ')\n      .replace(/\\s+/g, ' ')\n  );\n\n  const uniqueEvidence = [...new Set(\n    website_evidence\n      .split(/(?<=[.!?])\\s+/)\n      .map(text => text.trim())\n      .filter(text => text.length > 25)\n  )].join(' ').slice(0, 1500);\n\n  return {\n    json: {\n      ...original,\n      website_title,\n      website_description: website_description.slice(0, 300),\n      website_evidence: uniqueEvidence,\n      website_fetch_status: html.length > 0 ? 'success' : 'empty'\n    }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1024,
+        -176
+      ],
+      "id": "6ad480cf-ea45-40be-a5cd-84bea0650ef1",
+      "name": "Read Website Content"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO dbo.prospect_review_queue\n(   search_id,\n    osm_id,\n    source,\n    name,\n    industry,\n    location,\n    ideal_customer_type,\n    address,\n    website,\n    phone,\n    email,\n    osm_url,\n    data_quality,\n    processing_stage,\n    review_reason,\n    error_type,\n    error_message,\n    created_at\n)\nVALUES(\n    $1, $2, $3, $4, $5, $6,\n    $7, $8, $9, $10, $11, $12,\n    $13, $14, $15, $16, $17,\n    GETDATE()\n)\n",
+        "options": {
+          "queryReplacement": "={{ $json.search_id }}, {{ $json.osm_id }}, {{ $json.source }}, {{ $json.name }}, {{ $json.industry_requested }}, {{ $json.location_requested }}, {{ $json.ideal_customer_type }},{{ $json.address }}, {{ $json.website }}, {{ $json.phone }}, {{ $json.email }}, {{ $json.osm_url }}, {{ $json.data_quality }}, {{ $json.processing_stage }}, {{ $json.review_reason }}, {{ $json.error_type }},   {{ $json.error_message }}"
+        }
+      },
+      "type": "n8n-nodes-base.microsoftSql",
+      "typeVersion": 1.2,
+      "position": [
+        2448,
+        -560
+      ],
+      "id": "cd7606a7-82be-4bde-a66d-ca7d8f552e36",
+      "name": "Save for Review1"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO dbo.prospect_review_queue\n(   search_id,\n    osm_id,\n    source,\n    name,\n    industry,\n    location,\n    ideal_customer_type,\n    address,\n    website,\n    phone,\n    email,\n    osm_url,\n    data_quality,\n    processing_stage,\n    review_reason,\n    error_type,\n    error_message,\n    created_at\n)\nVALUES(\n    $1, $2, $3, $4, $5, $6,\n    $7, $8, $9, $10, $11, $12,\n    $13, $14, $15, $16, $17,\n    GETDATE()\n)\n",
+        "options": {
+          "queryReplacement": "={{ $json.search_id }}, {{ $json.osm_id }}, {{ $json.source }}, {{ $json.name }}, {{ $json.industry_requested }}, {{ $json.location_requested }}, {{ $json.ideal_customer_type }},{{ $json.address }}, {{ $json.website }}, {{ $json.phone }}, {{ $json.email }}, {{ $json.osm_url }}, {{ $json.data_quality }}, {{ $json.processing_stage }}, {{ $json.review_reason }}, {{ $json.error_type }},   {{ $json.error_message }}"
+        }
+      },
+      "type": "n8n-nodes-base.microsoftSql",
+      "typeVersion": 1.2,
+      "position": [
+        752,
+        176
+      ],
+      "id": "1f9612bc-6634-4514-b1e9-47a461dda309",
+      "name": "Save For Review1"
+    },
+    {
+      "parameters": {
+        "jsCode": "const prospect_data = $input.all().map(item => item.json);\n\nreturn prospect_data.map(item => ({\n  json: {\n    ...item,\n   processing_stage: 'ai_qualification',\n   review_reason: 'ai_qualification_failed',\n   error_type: 'ai_error',\n   error_message: String(item.error)\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2224,
+        -560
+      ],
+      "id": "8729e6be-9cc3-4655-8693-b5640e972697",
+      "name": "Prepare AI Errors"
+    },
+    {
+      "parameters": {
+        "jsCode": "const prospect_data = $(\"Parse AI Results\").all().map(item => item.json)\nconst responses = $input.all().map(item => item.json)\nreturn responses.map((response, index)=> ({\n    json:{\n      ...response,\n      search_id: prospect_data[index].search_id\n    }\n  }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1264,
+        208
+      ],
+      "id": "4923c4f2-bd9e-4c71-889d-7a5549930112",
+      "name": "Attach Search ID"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE dbo.prospect_search_runs\nSET\n    status = 'success',\n    updated_at = GETDATE()\nWHERE search_id = $1;",
+        "options": {
+          "queryReplacement": "={{ $json.search_id }}"
+        }
+      },
+      "type": "n8n-nodes-base.microsoftSql",
+      "typeVersion": 1.2,
+      "position": [
+        1456,
+        208
+      ],
+      "id": "32c3d763-689f-410e-9330-9821caec061a",
+      "name": "Mark Case Successful"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "On form submission": {
+      "main": [
+        [
+          {
+            "node": "Start Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch": {
+      "main": [
+        [
+          {
+            "node": "Find Location",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare BizData Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize OSM Prospects": {
+      "main": [
+        [
+          {
+            "node": "Combine Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare BizData Search": {
+      "main": [
+        [
+          {
+            "node": "BizData - Search Companies",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BizData - Search Companies": {
+      "main": [
+        [
+          {
+            "node": "Normalize BizData Prospects",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Failed Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize BizData Prospects": {
+      "main": [
+        [
+          {
+            "node": "Combine Results",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Deduplicate Prospects": {
+      "main": [
+        [
+          {
+            "node": "Check Data Quality",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "\tAI - Qualify Prospect": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Results",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare AI Errors",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rate Limit - Gemini": {
+      "main": [
+        [
+          {
+            "node": "\tAI - Qualify Prospect",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Prospect Website": {
+      "main": [
+        [
+          {
+            "node": "Read Website Content",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Failed Website",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Failed Status": {
+      "main": [
+        [
+          {
+            "node": "Update Search Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Search Log": {
+      "main": [
+        [
+          {
+            "node": "Get Search Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Search Log": {
+      "main": [
+        [
+          {
+            "node": "Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start Search": {
+      "main": [
+        [
+          {
+            "node": "Create Search Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Failed Website": {
+      "main": [
+        [
+          {
+            "node": "Save for Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pass Prospect": {
+      "main": [
+        [
+          {
+            "node": "Rate Limit - Gemini",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Search Query": {
+      "main": [
+        [
+          {
+            "node": "Get Local Businesses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Location": {
+      "main": [
+        [
+          {
+            "node": "Build Search Query",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Get Local Businesses": {
+      "main": [
+        [
+          {
+            "node": "Normalize OSM Prospects",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Failed Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Combine Results": {
+      "main": [
+        [
+          {
+            "node": "Deduplicate Prospects",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Data Quality": {
+      "main": [
+        [
+          {
+            "node": "Ready for AI?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ready for AI?": {
+      "main": [
+        [
+          {
+            "node": "Fetch Prospect Website",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare for Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare for Review": {
+      "main": [
+        [
+          {
+            "node": "Save For Review1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Results": {
+      "main": [
+        [
+          {
+            "node": "Find HubSpot Company",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find HubSpot Company": {
+      "main": [
+        [
+          {
+            "node": "Company Exists?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Company Exists?": {
+      "main": [
+        [
+          {
+            "node": "Prepare New Company",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update Company",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare New Company": {
+      "main": [
+        [
+          {
+            "node": "Create Company",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Company": {
+      "main": [
+        [
+          {
+            "node": "Add Qualification Note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Company": {
+      "main": [
+        [
+          {
+            "node": "Add Qualification Note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add Qualification Note": {
+      "main": [
+        [
+          {
+            "node": "Process in Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process in Batches": {
+      "main": [
+        [
+          {
+            "node": "Attach Search ID",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Pass Prospect",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Website Content": {
+      "main": [
+        [
+          {
+            "node": "Process in Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare AI Errors": {
+      "main": [
+        [
+          {
+            "node": "Save for Review1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach Search ID": {
+      "main": [
+        [
+          {
+            "node": "Mark Case Successful",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save for Review1": {
+      "main": [
+        [
+          {
+            "node": "Process in Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Case Successful": {
+      "main": [
+        [
+          {
+            "node": "Process in Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "nodeGroups": [],
+  "tags": []
+}
